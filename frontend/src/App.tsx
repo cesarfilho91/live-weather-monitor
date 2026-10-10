@@ -12,28 +12,70 @@ export default function App() {
   const [connection, setConnection] = useState<'connecting' | 'live' | 'reconnecting'>('connecting');
   const [lastEventAt, setLastEventAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
-  useEffect(() => {
-    let source: EventSource | null = null;
-    let active = true;
 
-    async function loadInitialSnapshot() {
-      try {
-        const response = await fetch(`${API_BASE}/api/weather`);
-        if (!response.ok) throw new Error('Não foi possível carregar a leitura inicial.');
-        const data = (await response.json()) as WeatherSnapshot;
-        if (active && data.items.length) setSnapshot(data);
-      } catch {
-        if (active) setError('Aguardando conexão com a API meteorológica.');
+useEffect(() => {
+  let active = true;
+  let source: EventSource | null = null;
+
+  async function connect() {
+    setLoading(true);
+    setError(null);
+    setConnection('connecting');
+
+    try {
+      const response = await fetch(`${API_BASE}/api/weather`);
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          throw new Error(
+            'A fonte meteorológica atingiu o limite de requisições. Os dados serão atualizados quando o serviço estiver disponível.'
+          );
+        }
+
+        throw new Error(
+          `Não foi possível consultar a API (HTTP ${response.status}).`
+        );
       }
+
+      const data = (await response.json()) as WeatherSnapshot;
+
+      if (!active) return;
+
+      if (data.items.length > 0) {
+        setSnapshot(data);
+        setError(null);
+      } else {
+        setError(
+          'A API respondeu, mas ainda não há leituras meteorológicas disponíveis.'
+        );
+      }
+    } catch (err) {
+      if (active) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível conectar à API meteorológica.'
+        );
+      }
+    } finally {
+      if (active) setLoading(false);
     }
 
-    void loadInitialSnapshot();
+    if (!active) return;
+
     source = new EventSource(`${API_BASE}/api/weather/stream`);
+
     source.addEventListener('weather', (event: MessageEvent<string>) => {
       if (!active) return;
+
       try {
         const data = JSON.parse(event.data) as WeatherSnapshot;
+
+        if (!data.items.length) return;
+
         setSnapshot(data);
         setLastEventAt(new Date().toISOString());
         setConnection('live');
@@ -42,14 +84,32 @@ export default function App() {
         setError('Recebemos uma atualização em formato inesperado.');
       }
     });
-    source.onopen = () => { if (active) setConnection('live'); };
-    source.onerror = () => { if (active) setConnection('reconnecting'); };
 
-    return () => {
-      active = false;
-      source?.close();
+    source.onopen = () => {
+      if (active) setConnection('live');
     };
-  }, []);
+
+    source.onerror = () => {
+      if (!active) return;
+
+      setConnection('reconnecting');
+      source?.close();
+
+      setError((current) =>
+        current ??
+        'O fluxo de atualizações está indisponível. Você pode tentar novamente.'
+      );
+    };
+  }
+
+  void connect();
+
+  return () => {
+    active = false;
+    source?.close();
+  };
+}, [retryCount]);
+
 
   const items = snapshot?.items ?? [];
   const featured = useMemo(() => items.find((item) => item.city.id === 'curitiba') ?? items[0], [items]);
@@ -91,7 +151,30 @@ export default function App() {
               <div><small>ÚLTIMA ATUALIZAÇÃO</small><strong>{formatTime(snapshot?.updated_at ?? null)}</strong></div></div>
           </section>
 
-          {error && <div className="notice" role="status">{error}</div>}
+
+          {error && (
+            <div className="notice" role="status">
+              <div>
+                <strong>Atualização temporariamente indisponível</strong>
+                <p>{error}</p>
+                {snapshot && (
+                  <small>
+                    Exibindo a última leitura disponível: {formatTime(snapshot.updated_at)}
+                  </small>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setRetryCount((count) => count + 1)}
+                disabled={loading}
+              >
+                <RefreshCw size={15} />
+                {loading ? 'Tentando...' : 'Tentar novamente'}
+              </button>
+            </div>
+          )}
+
 
           <section className="summary-grid" aria-label="Indicadores gerais">
             <article className="summary-card summary-card--accent"><div className="summary-label">CIDADES ATIVAS <span><Signal size={15} /></span></div>
