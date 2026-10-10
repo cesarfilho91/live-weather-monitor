@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 CITIES = [
     City(id="curitiba", name="Curitiba", region="PR", latitude=-25.4284, longitude=-49.2733),
     City(id="sao-paulo", name="São Paulo", region="SP", latitude=-23.5505, longitude=-46.6333),
-    
     City(
         id="rio-de-janeiro",
         name="Rio de Janeiro",
@@ -51,62 +50,107 @@ class WeatherService:
     async def refresh(self, client: httpx.AsyncClient | None = None) -> WeatherSnapshot:
         owns_client = client is None
         http_client = client or httpx.AsyncClient(timeout=self._timeout_seconds)
+
         try:
-            responses = await asyncio.gather(
-                *(self._fetch_city(http_client, city) for city in CITIES),
-                return_exceptions=True,
-            )
-            for result in responses:
-                if isinstance(result, Exception):
-                    logger.warning("A city weather request failed: %s", result)
-            fresh_by_id = {
-                item.city.id: item
-                for item in responses
-                if isinstance(item, CurrentWeather)
-            }
+            fresh_by_id: dict[str, CurrentWeather] = {}
+
+            for index, city in enumerate(CITIES):
+                if index > 0:
+                    await asyncio.sleep(0.5)
+
+                try:
+                    item = await self._fetch_city(http_client, city)
+                    fresh_by_id[item.city.id] = item
+                except Exception as exc:
+                    logger.warning(
+                        "Weather request failed for %s: %s",
+                        city.name,
+                        exc,
+                    )
+
             async with self._lock:
                 previous_by_id = {item.city.id: item for item in self._snapshot.items}
-                merged = [fresh_by_id.get(city.id, previous_by_id.get(city.id)) for city in CITIES]
+
+                merged = [
+                    fresh_by_id.get(
+                        city.id,
+                        previous_by_id.get(city.id),
+                    )
+                    for city in CITIES
+                ]
                 items = [item for item in merged if item is not None]
+
                 if not items:
                     logger.warning("Weather refresh failed; no cached observations available")
-                    self._snapshot = self._snapshot.model_copy(update={"stale": True}, deep=True)
+                    self._snapshot = self._snapshot.model_copy(
+                        update={"stale": True},
+                        deep=True,
+                    )
                     return self._snapshot.model_copy(deep=True)
-                updated_at = datetime.now(UTC)
+
                 stale = len(fresh_by_id) != len(CITIES)
-                self._snapshot = WeatherSnapshot(items=items, updated_at=updated_at, stale=stale)
+                updated_at = datetime.now(UTC) if fresh_by_id else self._snapshot.updated_at
+
+                self._snapshot = WeatherSnapshot(
+                    items=items,
+                    updated_at=updated_at,
+                    stale=stale,
+                )
                 published = self._snapshot.model_copy(deep=True)
-            self._publish(published)
+
+            if fresh_by_id:
+                self._publish(published)
+
             return published
         finally:
             if owns_client:
                 await http_client.aclose()
 
     async def _fetch_city(self, client: httpx.AsyncClient, city: City) -> CurrentWeather:
-        response = await client.get(
-            WEATHER_URL,
-            params={
-                "latitude": city.latitude,
-                "longitude": city.longitude,
-                "current": CURRENT_FIELDS,
-                "timezone": "auto",
-            },
-        )
-        response.raise_for_status()
-        payload: dict[str, Any] = response.json()
-        current = payload["current"]
-        return CurrentWeather(
-            city=city,
-            temperature_c=current["temperature_2m"],
-            feels_like_c=current["apparent_temperature"],
-            relative_humidity=current["relative_humidity_2m"],
-            apparent_temperature_c=current["apparent_temperature"],
-            precipitation_mm=current["precipitation"],
-            wind_speed_kmh=current["wind_speed_10m"],
-            weather_code=current["weather_code"],
-            is_day=bool(current["is_day"]),
-            observed_at=datetime.fromisoformat(current["time"]),
-        )
+        for attempt in range(2):
+            response = await client.get(
+                WEATHER_URL,
+                params={
+                    "latitude": city.latitude,
+                    "longitude": city.longitude,
+                    "current": CURRENT_FIELDS,
+                    "timezone": "auto",
+                },
+            )
+
+            if response.status_code == 429 and attempt == 0:
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    delay = min(max(float(retry_after), 1.0), 10.0)
+                except ValueError:
+                    delay = 3.0
+
+                logger.warning(
+                    "Open-Meteo rate limit for %s; retrying in %.1fs",
+                    city.name,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            response.raise_for_status()
+            payload: dict[str, Any] = response.json()
+            current = payload["current"]
+
+            return CurrentWeather(
+                city=city,
+                temperature_c=current["temperature_2m"],
+                feels_like_c=current["apparent_temperature"],
+                relative_humidity=current["relative_humidity_2m"],
+                apparent_temperature_c=current["apparent_temperature"],
+                precipitation_mm=current["precipitation"],
+                wind_speed_kmh=current["wind_speed_10m"],
+                weather_code=current["weather_code"],
+                is_day=bool(current["is_day"]),
+                observed_at=datetime.fromisoformat(current["time"]),
+            )
+
+        raise RuntimeError(f"Could not retrieve weather for {city.name} after retry")
 
     def subscribe(self) -> asyncio.Queue[WeatherSnapshot]:
         queue: asyncio.Queue[WeatherSnapshot] = asyncio.Queue(maxsize=1)

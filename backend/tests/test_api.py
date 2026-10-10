@@ -28,7 +28,11 @@ def test_empty_weather_snapshot_is_valid() -> None:
     assert snapshot.stale is False
 
 
+
 class FakeResponse:
+    status_code = 200
+    headers: dict[str, str] = {}
+
     def raise_for_status(self) -> None:
         return None
 
@@ -42,10 +46,11 @@ class FakeResponse:
                 "weather_code": 2,
                 "wind_speed_10m": 11.0,
                 "is_day": 1,
-                "time": datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="minutes"),
+                "time": datetime.now(UTC)
+                .replace(tzinfo=None)
+                .isoformat(timespec="minutes"),
             }
         }
-
 
 class FakeClient:
     async def get(self, url: str, params: dict[str, object]) -> FakeResponse:
