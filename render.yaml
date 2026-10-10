@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: live-weather-monitor-api
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: FRONTEND_ORIGIN
+        value: https://live-weather-monitor-web.onrender.com
+      - key: REFRESH_INTERVAL_SECONDS
+        value: 60
+  - type: web
+    name: live-weather-monitor-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://live-weather-monitor-api.onrender.com
