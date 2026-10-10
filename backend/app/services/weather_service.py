@@ -117,6 +117,13 @@ class WeatherService:
                 await asyncio.sleep(delay)
                 continue
 
+            if response.status_code == 429:
+                logger.error(
+                    "Open-Meteo 429: Retry-After=%s; body=%s",
+                    response.headers.get("Retry-After"),
+                    response.text[:1000],
+                )
+
             response.raise_for_status()
             payload: Any = response.json()
 
