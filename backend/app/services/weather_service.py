@@ -12,8 +12,21 @@ logger = logging.getLogger(__name__)
 CITIES = [
     City(id="curitiba", name="Curitiba", region="PR", latitude=-25.4284, longitude=-49.2733),
     City(id="sao-paulo", name="São Paulo", region="SP", latitude=-23.5505, longitude=-46.6333),
-    City(id="rio-de-janeiro", name="Rio de Janeiro", region="RJ", latitude=-22.9068, longitude=-43.1729),
-    City(id="porto-alegre", name="Porto Alegre", region="RS", latitude=-30.0346, longitude=-51.2177),
+    
+    City(
+        id="rio-de-janeiro",
+        name="Rio de Janeiro",
+        region="RJ",
+        latitude=-22.9068,
+        longitude=-43.1729,
+    ),
+    City(
+        id="porto-alegre",
+        name="Porto Alegre",
+        region="RS",
+        latitude=-30.0346,
+        longitude=-51.2177,
+    ),
     City(id="recife", name="Recife", region="PE", latitude=-8.0476, longitude=-34.8770),
 ]
 
